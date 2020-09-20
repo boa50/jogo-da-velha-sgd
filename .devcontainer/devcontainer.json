@@ -25,7 +25,7 @@
 
 	// Uncomment when using a ptrace-based debugger like C++, Go, and Rust
 	// Os números 1000 são decorrentes dos comandos $(id -u $USER):$(id -g $USER)
-	"runArgs": ["--gpus", "all", 
+	"runArgs": ["--gpus", "all",
 		"-u", "1000:1000", 
 		"-e", "DISPLAY", 
 		"-v", "/etc/group:/etc/group:ro", 

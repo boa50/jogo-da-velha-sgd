@@ -336,8 +336,7 @@ def play():
         else:
             print("It is a tie!")
 
-
 if __name__ == '__main__':
     train(int(1))
-    # compete(int(1))
-    play()
+    compete(int(1))
+    # play()
