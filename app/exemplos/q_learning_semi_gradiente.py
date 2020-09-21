@@ -248,10 +248,10 @@ def main_q_learning_run():
 
   stats = q_learning(env, estimator, 100, epsilon=0.1)
 
-  plot_cost_to_go_mountain_car(env, estimator)
-  plot_episode_stats(stats, smoothing_window=25)
+  # plot_cost_to_go_mountain_car(env, estimator)
+  # plot_episode_stats(stats, smoothing_window=25)
 
-  run_episode(env, estimator)
+  # run_episode(env, estimator)
 
 
 if __name__ == "__main__":

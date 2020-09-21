@@ -11,6 +11,11 @@
 import numpy as np
 import pickle
 
+import sklearn.pipeline
+import sklearn.preprocessing
+from sklearn.linear_model import SGDRegressor
+from sklearn.kernel_approximation import RBFSampler
+
 BOARD_ROWS = 3
 BOARD_COLS = 3
 BOARD_SIZE = BOARD_ROWS * BOARD_COLS
@@ -125,8 +130,78 @@ def get_all_states():
     return all_states
 
 
-all_states = get_all_states()
+# all_states = get_all_states()
 
+def get_random_state():
+    state = State()
+    symbol = np.random.choice([-1, 1])
+
+    for i in range(BOARD_ROWS):
+        for j in range(BOARD_COLS):
+            escolha = np.random.choice([0, symbol])
+            state = state.next_state(i, j, escolha)
+            
+            if escolha == symbol:
+                symbol = -symbol
+
+    return state
+
+
+class Estimator:
+  def __init__(self):
+    # Pré-processamento: padronização (média zero e variância unitária)
+    observations = [get_random_state().data.reshape(-1) for _ in range(100)]
+    # self.scaler = sklearn.preprocessing.StandardScaler()
+    # self.scaler.fit(observations)
+
+    # O estado é convertido para uma representação de mais alta dimensionalidade via kernels RBF (a estilo da SVM)
+    # Uma combinação de diferentes kernels é utilizada, com diferentes variâncias
+    self.featurizer = sklearn.pipeline.FeatureUnion([
+      ("rbf1", RBFSampler(gamma=5.0, n_components=100)),
+      ("rbf2", RBFSampler(gamma=2.0, n_components=100)),
+      ("rbf3", RBFSampler(gamma=1.0, n_components=100)),
+      ("rbf4", RBFSampler(gamma=0.5, n_components=100))
+    ])
+    # self.featurizer.fit(self.scaler.transform(observations))
+    self.featurizer.fit(observations)
+
+    # # Um modelo separado é criado para cada ação no espaço de ações
+    self.models = dict()
+    for i in range(BOARD_ROWS):
+        for j in range(BOARD_COLS):
+            model = SGDRegressor(learning_rate="constant")
+            # O método partial_fit é utilizado para inicializar o modelo
+            model.partial_fit([self.featurize_state(State())], [0])
+            self.models[(i,j)] = model
+
+  def featurize_state(self, state):
+    """
+    Retorna a representação de um estado no espaço de características
+    """
+    # scaled = self.scaler.transform([state])
+    featurized = self.featurizer.transform([state.data.reshape(-1)])
+    return featurized[0]
+
+  def predict(self, s, a=None):
+    """
+    Faz predições da função de valor.
+
+    Se uma ação a foi passada, retorna um único número de predição
+    Se nenhuma ação foi passada, retorna um vetor para todas as ações naquele estado
+
+    """
+    features = self.featurize_state(s)
+    if not a:
+      return np.array([m.predict([features])[0] for m in self.models.values()])
+    else:
+      return self.models[a].predict([features])[0]
+
+  def update(self, s, a, y):
+    """
+    Realiza o update dos parâmetros do estimador para um dado (estado, ação) com relação a y
+    """
+    features = self.featurize_state(s)
+    self.models[a].partial_fit([features], [y])
 
 # Jogador IA
 class Player:
@@ -150,17 +225,17 @@ class Player:
     # Passa por todos os jogos e cria uma estimação inicial do valor
     def set_symbol(self, symbol):
         self.symbol = symbol
-        for hash_val in all_states:
-            state, is_end = all_states[hash_val]
-            if is_end:
-                if state.winner == self.symbol:
-                    self.estimations[hash_val] = 1.0
-                elif state.winner == 0:
-                    self.estimations[hash_val] = 0.5
-                else:
-                    self.estimations[hash_val] = 0
-            else:
-                self.estimations[hash_val] = 0.5
+        # for hash_val in all_states:
+        #     state, is_end = all_states[hash_val]
+        #     if is_end:
+        #         if state.winner == self.symbol:
+        #             self.estimations[hash_val] = 1.0
+        #         elif state.winner == 0:
+        #             self.estimations[hash_val] = 0.5
+        #         else:
+        #             self.estimations[hash_val] = 0
+        #     else:
+        #         self.estimations[hash_val] = 0.5
 
     # Faz o update da estimação
     def backup(self):
@@ -336,7 +411,69 @@ def play():
         else:
             print("It is a tie!")
 
+def make_epsilon_greedy_policy(estimator, epsilon=0.1):
+  """
+  Cria uma política epsilon-greedy baseado em uma função de valor Q aproximada e um epsilon. Retorna as
+  probabilidades de cada ação
+  """
+  def policy_fn(observation):
+    values = observation.data.reshape(-1)
+    disponiveis = len(values) - np.count_nonzero(values) 
+    A = []
+    for v in values:
+      if v == 0:
+        A.append(epsilon / disponiveis)
+      else:
+        A.append(0)
+
+    q_values = estimator.predict(observation)
+    best_action = np.argmax((q_values+1)*A)
+    A[best_action] += (1.0 - epsilon)
+    return A
+
+  return policy_fn
+
 if __name__ == '__main__':
-    train(int(1))
-    compete(int(1))
+    estimator = Estimator()
+    policy = make_epsilon_greedy_policy(estimator, 0.1)
+
+    actions = []
+    for i in range(BOARD_ROWS):
+        for j in range(BOARD_COLS):
+            actions.append((i,j))
+
+    # Inicializa o environment
+    symbol = 1
+    state = State()
+
+    # Os passos no ambiente
+    for t in range(10):
+        action_probs = policy(state)
+        action_idx = np.random.choice(np.arange(len(actions)), p=action_probs)
+        action = actions[action_idx]
+
+        # Realiza uma ação
+        # next_state, reward, done = env.step(action)
+        next_state = state.next_state(action[0], action[1], symbol)
+        reward = 0
+        done = next_state.is_end()
+
+        # Update do TD
+        q_values_next = estimator.predict(next_state)
+
+        # Q-value para o TD Target
+        gamma = 1
+        td_target = reward + gamma * np.max(q_values_next)
+
+        # Atualiza o aproximador usando o td_target
+        estimator.update(state, action, td_target)
+
+        if done:
+            break
+
+        symbol = -symbol
+        state = next_state
+
+    # train(int(1))
+    # compete(int(1))
     # play()
