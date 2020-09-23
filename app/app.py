@@ -28,16 +28,7 @@ class State:
         # -1 é o símbolo do outro jogador
         self.data = np.zeros((BOARD_ROWS, BOARD_COLS))
         self.winner = None
-        self.hash_val = None
         self.end = None
-
-    # Calcula um hash para o estado (um valor único)
-    def hash(self):
-        if self.hash_val is None:
-            self.hash_val = 0
-            for i in np.nditer(self.data):
-                self.hash_val = self.hash_val * 3 + i + 1
-        return self.hash_val
 
     # Checa se alguém venceu o jogo ou se é um empate
     def is_end(self):
@@ -104,34 +95,6 @@ class State:
             print(out)
         print('-------------')
 
-
-# Chamada recursiva que cria todos os estados possíveis do jogo (todas as combinações possíveis
-# de peças em cada lugar)
-def get_all_states_impl(current_state, current_symbol, all_states):
-    for i in range(BOARD_ROWS):
-        for j in range(BOARD_COLS):
-            if current_state.data[i][j] == 0:
-                new_state = current_state.next_state(i, j, current_symbol)
-                new_hash = new_state.hash()
-                if new_hash not in all_states:
-                    is_end = new_state.is_end()
-                    all_states[new_hash] = (new_state, is_end)
-                    if not is_end:
-                        get_all_states_impl(new_state, -current_symbol, all_states)
-
-
-# Função que coleta todos os estados
-def get_all_states():
-    current_symbol = 1
-    current_state = State()
-    all_states = dict()
-    all_states[current_state.hash()] = (current_state, current_state.is_end())
-    get_all_states_impl(current_state, current_symbol, all_states)
-    return all_states
-
-
-# all_states = get_all_states()
-
 def get_random_state():
     state = State()
     symbol = np.random.choice([-1, 1])
@@ -149,10 +112,7 @@ def get_random_state():
 
 class Estimator:
   def __init__(self):
-    # Pré-processamento: padronização (média zero e variância unitária)
-    observations = [get_random_state().data.reshape(-1) for _ in range(100)]
-    # self.scaler = sklearn.preprocessing.StandardScaler()
-    # self.scaler.fit(observations)
+    observations = [get_random_state().data.reshape(-1) for _ in range(1000)]
 
     # O estado é convertido para uma representação de mais alta dimensionalidade via kernels RBF (a estilo da SVM)
     # Uma combinação de diferentes kernels é utilizada, com diferentes variâncias
@@ -162,10 +122,9 @@ class Estimator:
       ("rbf3", RBFSampler(gamma=1.0, n_components=100)),
       ("rbf4", RBFSampler(gamma=0.5, n_components=100))
     ])
-    # self.featurizer.fit(self.scaler.transform(observations))
     self.featurizer.fit(observations)
 
-    # # Um modelo separado é criado para cada ação no espaço de ações
+    # Um modelo separado é criado para cada ação no espaço de ações
     self.models = dict()
     for i in range(BOARD_ROWS):
         for j in range(BOARD_COLS):
@@ -178,9 +137,9 @@ class Estimator:
     """
     Retorna a representação de um estado no espaço de características
     """
-    # scaled = self.scaler.transform([state])
     featurized = self.featurizer.transform([state.data.reshape(-1)])
     return featurized[0]
+    # return state.data.reshape(-1)
 
   def predict(self, s, a=None):
     """
@@ -203,87 +162,103 @@ class Estimator:
     features = self.featurize_state(s)
     self.models[a].partial_fit([features], [y])
 
+
+def make_epsilon_greedy_policy(estimator, epsilon):
+  """
+  Cria uma política epsilon-greedy baseado em uma função de valor Q aproximada e um epsilon. Retorna as
+  probabilidades de cada ação
+  """
+  def policy_fn(observation):
+    values = observation.data.reshape(-1)
+    disponiveis = len(values) - np.count_nonzero(values)
+    
+    # Evitar a probabilidade 0 para todos em uma política greedy
+    eps = max(epsilon, 1e-10)
+
+    A = []
+    for v in values:
+      if v == 0:
+        A.append(eps / disponiveis)
+      else:
+        A.append(0)
+
+    q_values = estimator.predict(observation)
+    compare_array = (q_values+1)*A
+    best_value_action = np.max(compare_array)
+    best_idxs = np.where(compare_array == best_value_action)
+    best_action = np.random.choice(best_idxs[0])
+    
+    A[best_action] += (1.0 - eps)
+    return A
+
+  return policy_fn
+
 # Jogador IA
 class Player:
     def __init__(self, step_size=0.1, epsilon=0.1):
         self.estimations = dict()
         self.step_size = step_size
         self.epsilon = epsilon
-        self.states = []
-        self.greedy = []
+        self.state = None
         self.symbol = 0
 
-    def reset(self):
-        self.states = []
-        self.greedy = []
+        self.estimator = Estimator()
+        self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
+        self.action = (0,0)
+
+        self.actions = []
+        for i in range(BOARD_ROWS):
+            for j in range(BOARD_COLS):
+                self.actions.append((i,j))
 
     # Adiciona informação do novo estado
     def set_state(self, state):
-        self.states.append(state)
-        self.greedy.append(True)
+        self.state = state
 
-    # Passa por todos os jogos e cria uma estimação inicial do valor
     def set_symbol(self, symbol):
         self.symbol = symbol
-        # for hash_val in all_states:
-        #     state, is_end = all_states[hash_val]
-        #     if is_end:
-        #         if state.winner == self.symbol:
-        #             self.estimations[hash_val] = 1.0
-        #         elif state.winner == 0:
-        #             self.estimations[hash_val] = 0.5
-        #         else:
-        #             self.estimations[hash_val] = 0
-        #     else:
-        #         self.estimations[hash_val] = 0.5
 
     # Faz o update da estimação
-    def backup(self):
-        states = [state.hash() for state in self.states]
+    def backup(self, next_state):
+        is_end = next_state.is_end()
+        reward = -0.01
+        if is_end:
+            if next_state.winner == self.symbol:
+                reward = 1
+            elif next_state.winner == -self.symbol:
+                reward = -1
+            else:
+                reward = 0.5
 
-        for i in reversed(range(len(states) - 1)):
-            state = states[i]
-            td_error = self.greedy[i] * (
-                    self.estimations[states[i + 1]] - self.estimations[state]
-            )
-            self.estimations[state] += self.step_size * td_error
+        # Update do TD
+        q_values_next = self.estimator.predict(next_state)
+
+        # Q-value para o TD Target
+        gamma = 1
+        td_target = reward + gamma * np.max(q_values_next)
+
+        # Atualiza o aproximador usando o td_target
+        self.estimator.update(self.state, self.action, td_target)
 
     # Escolhe uma ação baseada no estado
     def act(self):
-        state = self.states[-1]
-        next_states = []
-        next_positions = []
-        for i in range(BOARD_ROWS):
-            for j in range(BOARD_COLS):
-                if state.data[i, j] == 0:
-                    next_positions.append([i, j])
-                    next_states.append(state.next_state(
-                        i, j, self.symbol).hash())
+        action_probs = self.policy(self.state)
+        action_idx = np.random.choice(np.arange(len(self.actions)), p=action_probs)
+        self.action = self.actions[action_idx]
 
-        if np.random.rand() < self.epsilon:
-            action = next_positions[np.random.randint(len(next_positions))]
-            action.append(self.symbol)
-            self.greedy[-1] = False
-            return action
+        next_state = self.state.next_state(self.action[0], self.action[1], self.symbol)
+        is_end = next_state.is_end()
 
-        values = []
-        for hash_val, pos in zip(next_states, next_positions):
-            values.append((self.estimations[hash_val], pos))
-
-        # shuffle para ser randômico caso hajam várias ações greedy
-        np.random.shuffle(values)
-        values.sort(key=lambda x: x[0], reverse=True)
-        action = values[0][1]
-        action.append(self.symbol)
-        return action
+        return next_state, is_end
 
     def save_policy(self):
         with open('app/policy_%s.bin' % ('first' if self.symbol == 1 else 'second'), 'wb') as f:
-            pickle.dump(self.estimations, f)
+            pickle.dump(self.estimator, f)
 
     def load_policy(self):
         with open('app/policy_%s.bin' % ('first' if self.symbol == 1 else 'second'), 'rb') as f:
-            self.estimations = pickle.load(f)
+            self.estimator = pickle.load(f)
+            self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
 
 
 class Judger:
@@ -297,36 +272,37 @@ class Judger:
         self.p2_symbol = -1
         self.p1.set_symbol(self.p1_symbol)
         self.p2.set_symbol(self.p2_symbol)
-        self.current_state = State()
-
-    def reset(self):
-        self.p1.reset()
-        self.p2.reset()
 
     def alternate(self):
         while True:
             yield self.p1
             yield self.p2
 
-    def play(self, print_state=False):
+    def play(self, train=False, print_state=False):
         alternator = self.alternate()
-        self.reset()
         current_state = State()
         self.p1.set_state(current_state)
         self.p2.set_state(current_state)
+        first_action = True
+        player = next(alternator)
         if print_state:
             current_state.print_state()
         while True:
-            player = next(alternator)
-            i, j, symbol = player.act()
-            next_state_hash = current_state.next_state(i, j, symbol).hash()
-            current_state, is_end = all_states[next_state_hash]
-            self.p1.set_state(current_state)
-            self.p2.set_state(current_state)
+            player.set_state(current_state)
+            current_state, is_end = player.act()
+            
             if print_state:
                 current_state.print_state()
             if is_end:
+                if train:
+                    self.p1.backup(current_state)
+                    self.p2.backup(current_state)
                 return current_state.winner
+            else:
+                player = next(alternator)
+                if train and not first_action:
+                    player.backup(current_state)
+                first_action = False
 
 
 # human interface
@@ -355,7 +331,11 @@ class HumanPlayer:
         data = self.keys.index(key)
         i = data // BOARD_COLS
         j = data % BOARD_COLS
-        return i, j, self.symbol
+
+        next_state = self.state.next_state(i, j, self.symbol)
+        is_end = next_state.is_end()
+
+        return next_state, is_end
 
 
 def train(epochs, print_every_n=500):
@@ -365,16 +345,13 @@ def train(epochs, print_every_n=500):
     player1_win = 0.0
     player2_win = 0.0
     for i in range(1, epochs + 1):
-        winner = judger.play(print_state=False)
+        winner = judger.play(train=True, print_state=False)
         if winner == 1:
             player1_win += 1
         if winner == -1:
             player2_win += 1
         if i % print_every_n == 0:
             print('Epoch %d, player 1 winrate: %.02f, player 2 winrate: %.02f' % (i, player1_win / i, player2_win / i))
-        player1.backup()
-        player2.backup()
-        judger.reset()
     player1.save_policy()
     player2.save_policy()
 
@@ -393,7 +370,6 @@ def compete(turns):
             player1_win += 1
         if winner == -1:
             player2_win += 1
-        judger.reset()
     print('%d turns, player 1 win %.02f, player 2 win %.02f' % (turns, player1_win / turns, player2_win / turns))
 
 
@@ -411,69 +387,7 @@ def play():
         else:
             print("It is a tie!")
 
-def make_epsilon_greedy_policy(estimator, epsilon=0.1):
-  """
-  Cria uma política epsilon-greedy baseado em uma função de valor Q aproximada e um epsilon. Retorna as
-  probabilidades de cada ação
-  """
-  def policy_fn(observation):
-    values = observation.data.reshape(-1)
-    disponiveis = len(values) - np.count_nonzero(values) 
-    A = []
-    for v in values:
-      if v == 0:
-        A.append(epsilon / disponiveis)
-      else:
-        A.append(0)
-
-    q_values = estimator.predict(observation)
-    best_action = np.argmax((q_values+1)*A)
-    A[best_action] += (1.0 - epsilon)
-    return A
-
-  return policy_fn
-
 if __name__ == '__main__':
-    estimator = Estimator()
-    policy = make_epsilon_greedy_policy(estimator, 0.1)
-
-    actions = []
-    for i in range(BOARD_ROWS):
-        for j in range(BOARD_COLS):
-            actions.append((i,j))
-
-    # Inicializa o environment
-    symbol = 1
-    state = State()
-
-    # Os passos no ambiente
-    for t in range(10):
-        action_probs = policy(state)
-        action_idx = np.random.choice(np.arange(len(actions)), p=action_probs)
-        action = actions[action_idx]
-
-        # Realiza uma ação
-        # next_state, reward, done = env.step(action)
-        next_state = state.next_state(action[0], action[1], symbol)
-        reward = 0
-        done = next_state.is_end()
-
-        # Update do TD
-        q_values_next = estimator.predict(next_state)
-
-        # Q-value para o TD Target
-        gamma = 1
-        td_target = reward + gamma * np.max(q_values_next)
-
-        # Atualiza o aproximador usando o td_target
-        estimator.update(state, action, td_target)
-
-        if done:
-            break
-
-        symbol = -symbol
-        state = next_state
-
-    # train(int(1))
-    # compete(int(1))
-    # play()
+    # train(int(1e5), print_every_n=500)
+    # compete(int(1e3))
+    play()

@@ -201,7 +201,7 @@ def q_learning(env, estimator, num_episodes, gamma=1.0, epsilon=0.1, epsilon_dec
 
       # Realiza uma ação
       next_state, reward, done, _ = env.step(action)
-      #env.render()
+      # env.render()
 
       # Atualiza as estatísticas
       stats.episode_rewards[i_episode] += reward
@@ -248,10 +248,10 @@ def main_q_learning_run():
 
   stats = q_learning(env, estimator, 100, epsilon=0.1)
 
-  # plot_cost_to_go_mountain_car(env, estimator)
-  # plot_episode_stats(stats, smoothing_window=25)
+  plot_cost_to_go_mountain_car(env, estimator)
+  plot_episode_stats(stats, smoothing_window=25)
 
-  # run_episode(env, estimator)
+  run_episode(env, estimator)
 
 
 if __name__ == "__main__":

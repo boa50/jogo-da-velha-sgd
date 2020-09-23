@@ -338,6 +338,6 @@ def play():
 
 
 if __name__ == '__main__':
-    train(int(1e5))
-    compete(int(1e3))
+    # train(int(1e5))
+    # compete(int(1e3))
     play()
