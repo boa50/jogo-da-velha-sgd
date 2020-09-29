@@ -122,7 +122,7 @@ class Estimator:
       ("rbf2", RBFSampler(gamma=2.0, n_components=100)),
       ("rbf3", RBFSampler(gamma=1.0, n_components=100)),
       ("rbf4", RBFSampler(gamma=0.5, n_components=100))
-    ])
+    ], n_jobs=-1)
     self.featurizer.fit(observations)
     # self.featurizer.fit(self.scaler.transform(observations))
 
