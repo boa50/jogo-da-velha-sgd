@@ -111,11 +111,12 @@ def get_random_state():
 
 
 class Estimator:
-  def __init__(self):
-    observations = [get_random_state().data.reshape(-1) for _ in range(1000)]
+  def __init__(self, symbol):
+    observations = [get_random_state().data.reshape(-1) for _ in range(10000)]
+    self.symbol = symbol
+    # self.scaler = sklearn.preprocessing.StandardScaler()
+    # self.scaler.fit(observations)
 
-    # O estado é convertido para uma representação de mais alta dimensionalidade via kernels RBF (a estilo da SVM)
-    # Uma combinação de diferentes kernels é utilizada, com diferentes variâncias
     self.featurizer = sklearn.pipeline.FeatureUnion([
       ("rbf1", RBFSampler(gamma=5.0, n_components=100)),
       ("rbf2", RBFSampler(gamma=2.0, n_components=100)),
@@ -123,86 +124,66 @@ class Estimator:
       ("rbf4", RBFSampler(gamma=0.5, n_components=100))
     ])
     self.featurizer.fit(observations)
+    # self.featurizer.fit(self.scaler.transform(observations))
 
-    # Um modelo separado é criado para cada ação no espaço de ações
     self.models = dict()
     for i in range(BOARD_ROWS):
         for j in range(BOARD_COLS):
             model = SGDRegressor(learning_rate="constant")
-            # O método partial_fit é utilizado para inicializar o modelo
             model.partial_fit([self.featurize_state(State())], [0])
             self.models[(i,j)] = model
 
   def featurize_state(self, state):
-    """
-    Retorna a representação de um estado no espaço de características
-    """
+    # scaled = self.scaler.transform([state.data.reshape(-1)])
+    # featurized = self.featurizer.transform(scaled)
     featurized = self.featurizer.transform([state.data.reshape(-1)])
     return featurized[0]
     # return state.data.reshape(-1)
 
   def predict(self, s, a=None):
-    """
-    Faz predições da função de valor.
-
-    Se uma ação a foi passada, retorna um único número de predição
-    Se nenhuma ação foi passada, retorna um vetor para todas as ações naquele estado
-
-    """
     features = self.featurize_state(s)
     if not a:
-      return np.array([m.predict([features])[0] for m in self.models.values()])
+        return np.array([m.predict([features])[0] for m in self.models.values()])
     else:
-      return self.models[a].predict([features])[0]
+        return self.models[a].predict([features])[0]
 
   def update(self, s, a, y):
-    """
-    Realiza o update dos parâmetros do estimador para um dado (estado, ação) com relação a y
-    """
     features = self.featurize_state(s)
     self.models[a].partial_fit([features], [y])
 
 
 def make_epsilon_greedy_policy(estimator, epsilon):
-  """
-  Cria uma política epsilon-greedy baseado em uma função de valor Q aproximada e um epsilon. Retorna as
-  probabilidades de cada ação
-  """
   def policy_fn(observation):
     values = observation.data.reshape(-1)
     disponiveis = len(values) - np.count_nonzero(values)
-    
-    # Evitar a probabilidade 0 para todos em uma política greedy
-    eps = max(epsilon, 1e-10)
+    q_values = estimator.predict(observation)
 
     A = []
-    for v in values:
-      if v == 0:
-        A.append(eps / disponiveis)
+    for i in range(len(values)):
+      if values[i] == 0:
+        A.append(epsilon / disponiveis)
       else:
         A.append(0)
+        q_values[i] = -np.inf
 
-    q_values = estimator.predict(observation)
-    compare_array = (q_values+1)*A
-    best_value_action = np.max(compare_array)
-    best_idxs = np.where(compare_array == best_value_action)
+    best_value_action = np.max(q_values)
+    best_idxs = np.where(q_values == best_value_action)
     best_action = np.random.choice(best_idxs[0])
-    
-    A[best_action] += (1.0 - eps)
+    A[best_action] += (1.0 - epsilon)
     return A
 
   return policy_fn
 
-# Jogador IA
 class Player:
-    def __init__(self, step_size=0.1, epsilon=0.1):
+    def __init__(self, step_size=0.1, epsilon=0.1, symbol=0):
         self.estimations = dict()
         self.step_size = step_size
         self.epsilon = epsilon
+        self.previous_state = State()
         self.state = None
-        self.symbol = 0
+        self.symbol = symbol
 
-        self.estimator = Estimator()
+        self.estimator = Estimator(self.symbol)
         self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
         self.action = (0,0)
 
@@ -213,29 +194,42 @@ class Player:
 
     # Adiciona informação do novo estado
     def set_state(self, state):
+        if self.state != None:
+            self.previous_state.data = np.copy(self.state.data)
         self.state = state
 
-    def set_symbol(self, symbol):
+    def set_symbol(self, symbol):        
         self.symbol = symbol
 
+    def update_epsilon(self, epsilon):
+        epsilon = max(epsilon, 0.01)
+        self.policy = make_epsilon_greedy_policy(self.estimator, epsilon)
+
     # Faz o update da estimação
-    def backup(self, next_state):
+    def backup(self, next_state, other=False):
         is_end = next_state.is_end()
-        reward = -0.01
+        reward = 0
         if is_end:
             if next_state.winner == self.symbol:
-                reward = 1
+                reward = 0.5
             elif next_state.winner == -self.symbol:
                 reward = -1
             else:
-                reward = 0.5
+                reward = 0
+
+        if other:
+            next_state.data = np.copy(self.state.data)
+            self.state = self.previous_state
 
         # Update do TD
         q_values_next = self.estimator.predict(next_state)
 
         # Q-value para o TD Target
-        gamma = 1
-        td_target = reward + gamma * np.max(q_values_next)
+        if is_end:
+            td_target = reward
+        else:
+            gamma = 1
+            td_target = reward + gamma * np.max(q_values_next)
 
         # Atualiza o aproximador usando o td_target
         self.estimator.update(self.state, self.action, td_target)
@@ -249,29 +243,25 @@ class Player:
         next_state = self.state.next_state(self.action[0], self.action[1], self.symbol)
         is_end = next_state.is_end()
 
+        self.backup(next_state)
+
         return next_state, is_end
 
-    def save_policy(self):
-        with open('app/policy_%s.bin' % ('first' if self.symbol == 1 else 'second'), 'wb') as f:
+    def save_policy(self, epoch):
+        with open('app/policy_%s_%d.bin' % (('first' if self.symbol == 1 else 'second'), epoch), 'wb') as f:
             pickle.dump(self.estimator, f)
 
-    def load_policy(self):
-        with open('app/policy_%s.bin' % ('first' if self.symbol == 1 else 'second'), 'rb') as f:
+    def load_policy(self, epoch):
+        with open('app/policy_%s_%d.bin' % (('first' if self.symbol == 1 else 'second'), epoch), 'rb') as f:
             self.estimator = pickle.load(f)
             self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
 
 
 class Judger:
-    # O player1, com símbolo 1, joga primeiro
-    # O player2 tem o símbolo -1
     def __init__(self, player1, player2):
         self.p1 = player1
         self.p2 = player2
         self.current_player = None
-        self.p1_symbol = 1
-        self.p2_symbol = -1
-        self.p1.set_symbol(self.p1_symbol)
-        self.p2.set_symbol(self.p2_symbol)
 
     def alternate(self):
         while True:
@@ -283,26 +273,22 @@ class Judger:
         current_state = State()
         self.p1.set_state(current_state)
         self.p2.set_state(current_state)
-        first_action = True
-        player = next(alternator)
         if print_state:
             current_state.print_state()
         while True:
-            player.set_state(current_state)
+            player = next(alternator)
             current_state, is_end = player.act()
             
             if print_state:
                 current_state.print_state()
             if is_end:
                 if train:
-                    self.p1.backup(current_state)
-                    self.p2.backup(current_state)
+                    player = next(alternator)
+                    player.backup(current_state, True)
                 return current_state.winner
-            else:
-                player = next(alternator)
-                if train and not first_action:
-                    player.backup(current_state)
-                first_action = False
+
+            self.p1.set_state(current_state)
+            self.p2.set_state(current_state)
 
 
 # human interface
@@ -312,7 +298,7 @@ class Judger:
 # | z | x | c |
 class HumanPlayer:
     def __init__(self, **kwargs):
-        self.symbol = None
+        self.symbol = 1
         self.keys = ['q', 'w', 'e', 'a', 's', 'd', 'z', 'x', 'c']
         self.state = None
 
@@ -337,10 +323,13 @@ class HumanPlayer:
 
         return next_state, is_end
 
-
 def train(epochs, print_every_n=500):
-    player1 = Player(epsilon=0.01)
-    player2 = Player(epsilon=0.01)
+    epsilon = 1
+    epsilon_decay = 0.999
+    epsilon_min = 0.01
+
+    player1 = Player(epsilon=epsilon, symbol=1)
+    player2 = Player(epsilon=epsilon, symbol=-1)
     judger = Judger(player1, player2)
     player1_win = 0.0
     player2_win = 0.0
@@ -352,16 +341,21 @@ def train(epochs, print_every_n=500):
             player2_win += 1
         if i % print_every_n == 0:
             print('Epoch %d, player 1 winrate: %.02f, player 2 winrate: %.02f' % (i, player1_win / i, player2_win / i))
-    player1.save_policy()
-    player2.save_policy()
+
+            player1.save_policy(i)
+            player2.save_policy(i)
+
+        epsilon = max(epsilon_min, epsilon * epsilon_decay)
+        player1.update_epsilon(epsilon)
+        player2.update_epsilon(epsilon)
 
 
-def compete(turns):
-    player1 = Player(epsilon=0)
-    player2 = Player(epsilon=0)
+def compete(turns, policy_number):
+    player1 = Player(epsilon=0, symbol=1)
+    player2 = Player(epsilon=0, symbol=-1)
     judger = Judger(player1, player2)
-    player1.load_policy()
-    player2.load_policy()
+    player1.load_policy(policy_number)
+    player2.load_policy(policy_number)
     player1_win = 0.0
     player2_win = 0.0
     for _ in range(turns):
@@ -373,12 +367,12 @@ def compete(turns):
     print('%d turns, player 1 win %.02f, player 2 win %.02f' % (turns, player1_win / turns, player2_win / turns))
 
 
-def play():
+def play(policy_number):
     while True:
         player1 = HumanPlayer()
-        player2 = Player(epsilon=0)
+        player2 = Player(epsilon=0, symbol=-1)
         judger = Judger(player1, player2)
-        player2.load_policy()
+        player2.load_policy(policy_number)
         winner = judger.play()
         if winner == player2.symbol:
             print("You lose!")
@@ -388,6 +382,6 @@ def play():
             print("It is a tie!")
 
 if __name__ == '__main__':
-    # train(int(1e5), print_every_n=500)
+    train(int(1e5), print_every_n=1000)
     # compete(int(1e3))
-    play()
+    # play(30000)

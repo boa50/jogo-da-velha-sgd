@@ -127,7 +127,6 @@ def get_all_states():
 
 all_states = get_all_states()
 
-
 # Jogador IA
 class Player:
     def __init__(self, step_size=0.1, epsilon=0.1):
@@ -297,12 +296,11 @@ def train(epochs, print_every_n=500):
             player2_win += 1
         if i % print_every_n == 0:
             print('Epoch %d, player 1 winrate: %.02f, player 2 winrate: %.02f' % (i, player1_win / i, player2_win / i))
+            player1.save_policy()
+            player2.save_policy()
         player1.backup()
         player2.backup()
         judger.reset()
-    player1.save_policy()
-    player2.save_policy()
-
 
 def compete(turns):
     player1 = Player(epsilon=0)
@@ -338,6 +336,6 @@ def play():
 
 
 if __name__ == '__main__':
-    # train(int(1e5))
+    # train(int(1e5), print_every_n=500)
     # compete(int(1e3))
     play()
