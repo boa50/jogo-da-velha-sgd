@@ -1,5 +1,7 @@
 import numpy as np
 import pickle
+import os
+import csv
 
 from env import State
 from estimator import Estimator
@@ -11,15 +13,15 @@ BOARD_COLS = 3
 
 class Player:
     def __init__(self, step_size=0.1, epsilon=0.1, symbol=0):
-        self.estimations = dict()
         self.step_size = step_size
         self.epsilon = epsilon
         self.previous_state = State()
         self.state = None
         self.symbol = symbol
+        self.td_errors = []
 
-        self.estimator = Estimator(self.symbol)
-        self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
+        self.estimator = Estimator()
+        self.policy = make_epsilon_greedy_policy(self.estimator)
         self.action = (0,0)
 
         self.actions = []
@@ -36,9 +38,8 @@ class Player:
     def set_symbol(self, symbol):        
         self.symbol = symbol
 
-    def update_epsilon(self, epsilon):
-        epsilon = max(epsilon, 0.01)
-        self.policy = make_epsilon_greedy_policy(self.estimator, epsilon)
+    def set_epsilon(self, epsilon):
+        self.epsilon = epsilon
 
     # Faz o update da estimação
     def backup(self, next_state, other=False):
@@ -46,7 +47,7 @@ class Player:
         reward = 0
         if is_end:
             if next_state.winner == self.symbol:
-                reward = 0.5
+                reward = 1
             elif next_state.winner == -self.symbol:
                 reward = -1
             else:
@@ -66,12 +67,17 @@ class Player:
             gamma = 1
             td_target = reward + gamma * np.max(q_values_next)
 
+        # Cálculo do TD error
+        td = self.estimator.predict(self.state, self.action)
+        td_error = np.abs(td_target - td)
+        self.td_errors.append(td_error)
+
         # Atualiza o aproximador usando o td_target
         self.estimator.update(self.state, self.action, td_target)
 
     # Escolhe uma ação baseada no estado
     def act(self):
-        action_probs = self.policy(self.state)
+        action_probs = self.policy(self.state, self.epsilon)
         action_idx = np.random.choice(np.arange(len(self.actions)), p=action_probs)
         self.action = self.actions[action_idx]
 
@@ -86,10 +92,18 @@ class Player:
         with open('app/saves/policy_%s_%d.bin' % (('first' if self.symbol == 1 else 'second'), epoch), 'wb') as f:
             pickle.dump(self.estimator, f)
 
+        path = 'app/saves/metrics_%s.csv' % ('first' if self.symbol == 1 else 'second')
+        metrics_file = open(path, "a")
+        with metrics_file:
+            writer = csv.writer(metrics_file)
+            for td_error in self.td_errors : writer.writerow ([td_error])
+
+        self.td_errors.clear()
+
     def load_policy(self, epoch):
         with open('app/saves/policy_%s_%d.bin' % (('first' if self.symbol == 1 else 'second'), epoch), 'rb') as f:
             self.estimator = pickle.load(f)
-            self.policy = make_epsilon_greedy_policy(self.estimator, self.epsilon)
+            self.policy = make_epsilon_greedy_policy(self.estimator)
 
 # human interface
 # input a number to put a chessman

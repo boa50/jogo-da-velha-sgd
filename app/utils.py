@@ -19,8 +19,8 @@ def get_random_state():
 
     return state
 
-def make_epsilon_greedy_policy(estimator, epsilon):
-  def policy_fn(observation):
+def make_epsilon_greedy_policy(estimator):
+  def policy_fn(observation, epsilon):
     values = observation.data.reshape(-1)
     disponiveis = len(values) - np.count_nonzero(values)
     q_values = estimator.predict(observation)

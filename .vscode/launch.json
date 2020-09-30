@@ -8,8 +8,8 @@
             "name": "Python: app.py",
             "type": "python",
             "request": "launch",
-            "program":"${file}",
-            // "program": "${workspaceFolder}/app/app.py",
+            // "program":"${file}",
+            "program": "${workspaceFolder}/app/app.py",
             "console": "integratedTerminal"
         }
     ]
