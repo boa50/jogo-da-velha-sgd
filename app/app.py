@@ -9,6 +9,8 @@
 #######################################################################
 import os
 import csv
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from player import Player, HumanPlayer
 from judger import Judger
@@ -62,12 +64,19 @@ def train(epochs, print_every_n=500):
         player1.set_epsilon(epsilon)
         player2.set_epsilon(epsilon)
 
-def compete(turns, policy_number):
+def compete_random(turns, policy_number):
+    player1 = Player(epsilon=1, symbol=1)
+    compete(player1, turns, policy_number)
+
+def compete_greedy(turns, policy_number):
     player1 = Player(epsilon=0, symbol=1)
-    player2 = Player(epsilon=0, symbol=-1)
-    judger = Judger(player1, player2)
     player1.load_policy(policy_number)
+    compete(player1, turns, policy_number)
+
+def compete(player1, turns, policy_number):
+    player2 = Player(epsilon=0, symbol=-1)
     player2.load_policy(policy_number)
+    judger = Judger(player1, player2)
     player1_win = 0.0
     player2_win = 0.0
     for _ in range(turns):
@@ -76,7 +85,10 @@ def compete(turns, policy_number):
             player1_win += 1
         if winner == -1:
             player2_win += 1
-    print('%d turns, player 1 win %.02f, player 2 win %.02f' % (turns, player1_win / turns, player2_win / turns))
+
+    draw_rate = (turns - (player1_win + player2_win)) / turns
+
+    print('%d turns, player 1 winrate: %.02f, player 2 winrate: %.02f, draw rate: %.02f' % (turns, player1_win / turns, player2_win / turns, draw_rate))
 
 def play(policy_number):
     player1 = HumanPlayer()
@@ -92,7 +104,51 @@ def play(policy_number):
         else:
             print("It is a tie!")
 
+def plot_stats(stats, smoothing_window=1, xlabel="", ylabel="", title="", legends=[]):
+    fig = plt.figure(figsize=(10,5))
+    has_legend = len(legends) > 0
+
+    if smoothing_window > 1:
+        if has_legend:
+            for s, l in zip(stats, legends):
+                stats_smoothed = pd.Series(s).rolling(smoothing_window, min_periods=smoothing_window).mean()
+                plt.plot(stats_smoothed, label=l)
+        else:
+            for s in stats:
+                stats_smoothed = pd.Series(s).rolling(smoothing_window, min_periods=smoothing_window).mean()
+                plt.plot(stats_smoothed)
+    else:
+        if has_legend:
+            for s, l in zip(stats, legends):
+                plt.plot(s, label=l)
+        else:
+            for s, l in zip(stats, legends):
+                plt.plot(s)
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+
+    if has_legend:
+        plt.legend()
+
+    plt.show()
+
 if __name__ == '__main__':
-    # train(int(1e5), print_every_n=1000)
-    # compete(int(1e3), policy_number=10000)
-    # play(10000)
+    train(int(1e5), print_every_n=1000)
+    # compete_greedy(int(1e3), policy_number=100000)
+    # compete_random(int(1e3), policy_number=100000)
+    # play(50000)
+
+    # df = pd.read_csv('app/saves/metrics_second.csv')
+    # plot_stats([df['td_error']], smoothing_window=1000, 
+    #             xlabel="Amostras", 
+    #             ylabel="TD error", 
+    #             title="TD error ao longo do tempo (média móvel de 1000)")
+
+    # df = pd.read_csv('app/saves/metrics_all.csv')
+    # plot_stats([df['win_rate1'], df['win_rate2'], df['draw_rate']],
+    #             xlabel="Época", 
+    #             ylabel="Taxa", 
+    #             title="Situação por época de treinamento",
+    #             legends=['Player 1 vitória', 'Player 2 vitória', 'Empate'])
